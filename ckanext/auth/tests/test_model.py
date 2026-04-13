@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+from datetime import datetime as dt
+from datetime import timezone as tz
 from typing import cast
 from urllib import parse
 
+import pyotp
 import pytest
 
 import ckan.plugins.toolkit as tk
 
+from ckanext.auth import config as auth_config
+from ckanext.auth.exceptions import ReplayAttackError
 from ckanext.auth.model import UserSecret
 
 CODE_LENGTH = 6
@@ -82,3 +87,53 @@ class TestUserSecretModel:
         assert user["name"] in secret.provisioning_uri
         assert cast(str, secret.secret) in secret.provisioning_uri
         assert parse.quote_plus(tk.config["ckan.site_url"]) in secret.provisioning_uri
+
+
+@pytest.mark.usefixtures("with_plugins", "clean_db")
+@pytest.mark.ckan_config(auth_config.CONF_2FA_METHOD, auth_config.METHOD_AUTHENTICATOR)
+class TestTOTPReplayDetection:
+    def test_first_login_no_replay(self, user):
+        """First login should succeed without replay detection."""
+        secret = UserSecret.create_for_user(user["name"])
+        totp = pyotp.TOTP(cast(str, secret.secret))
+        code = totp.now()
+
+        assert secret.last_access is None
+        assert secret.check_code(code)
+        assert secret.last_access is not None
+
+    def test_replay_same_code_raises_error(self, user):
+        """Using the same code twice should raise ReplayAttackError."""
+        secret = UserSecret.create_for_user(user["name"])
+        totp = pyotp.TOTP(cast(str, secret.secret))
+        code = totp.now()
+
+        assert secret.check_code(code)
+
+        with pytest.raises(ReplayAttackError):
+            secret.check_code(code)
+
+    def test_new_counter_succeeds_after_last_access(self, user):
+        """A code from a future counter should not be flagged as replay."""
+        secret = UserSecret.create_for_user(user["name"])
+        totp = pyotp.TOTP(cast(str, secret.secret))
+
+        # Simulate a past login by setting last_access to a past time
+        past_time = dt(2020, 1, 1, 0, 0, 0, tzinfo=tz.utc)
+        secret.last_access = past_time
+
+        code = totp.now()
+        assert secret.check_code(code)
+
+    def test_naive_last_access_treated_as_utc(self, user):
+        """A naive last_access datetime should be treated as UTC and not
+        cause false positive replay detection."""
+        secret = UserSecret.create_for_user(user["name"])
+        totp = pyotp.TOTP(cast(str, secret.secret))
+
+        # Set last_access as a naive datetime (as the DB might return)
+        past_time = dt(2020, 1, 1, 0, 0, 0)  # naive, no tzinfo
+        secret.last_access = past_time
+
+        code = totp.now()
+        assert secret.check_code(code)

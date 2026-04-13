@@ -119,9 +119,26 @@ class UserSecret(tk.BaseModel):
             result = totp.verify(code)
 
         if result and not verify_only:
-            # check for replay attack...
-            if is_totp_enabled and self.last_access and totp.at(cast(dt, self.last_access)) == code:
-                raise ReplayAttackError("The code has already been used")
+            # check for replay attack using counter-based comparison
+            if is_totp_enabled and self.last_access:
+                last_access_dt = cast(dt, self.last_access)
+                if last_access_dt.tzinfo is None:
+                    last_access_dt = last_access_dt.replace(tzinfo=tz.utc)
+
+                last_counter = totp.timecode(last_access_dt)
+                now = dt.now(tz.utc)
+                current_counter = totp.timecode(now)
+
+                # determine which counter the submitted code matches.
+                # if no match is found (e.g., due to a rare time boundary
+                # drift between verify and this check), we allow the login
+                # since the code was already verified as valid above.
+                for offset in range(-1, 2):  # valid_window = 1
+                    candidate = current_counter + offset
+                    if totp.generate_otp(candidate) == code:
+                        if candidate <= last_counter:
+                            raise ReplayAttackError("The code has already been used")
+                        break
 
             self.last_access = dt.now(tz.utc)
             model.Session.commit()
