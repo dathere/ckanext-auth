@@ -125,6 +125,22 @@ class TestTOTPReplayDetection:
         code = totp.now()
         assert secret.check_code(code)
 
+    def test_verify_only_then_full_check_succeeds(self, user):
+        """A verify_only check followed by a full check with the same code
+        should not raise ReplayAttackError (mirrors the AJAX pre-validation
+        followed by form submission login flow)."""
+        secret = UserSecret.create_for_user(user["name"])
+        totp = pyotp.TOTP(cast(str, secret.secret))
+        code = totp.now()
+
+        # First call: AJAX pre-validation (verify_only=True)
+        assert secret.check_code(code, verify_only=True)
+        assert secret.last_access is None
+
+        # Second call: actual form-based login (verify_only=False)
+        assert secret.check_code(code)
+        assert secret.last_access is not None
+
     def test_naive_last_access_treated_as_utc(self, user):
         """A naive last_access datetime should be treated as UTC and not
         cause false positive replay detection."""
