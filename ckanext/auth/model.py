@@ -129,7 +129,10 @@ class UserSecret(tk.BaseModel):
                 now = dt.now(tz.utc)
                 current_counter = totp.timecode(now)
 
-                # determine which counter the submitted code matches
+                # determine which counter the submitted code matches.
+                # if no match is found (e.g., due to a rare time boundary
+                # drift between verify and this check), we allow the login
+                # since the code was already verified as valid above.
                 for offset in range(-1, 2):  # valid_window = 1
                     candidate = current_counter + offset
                     if totp.generate_otp(candidate) == code:
