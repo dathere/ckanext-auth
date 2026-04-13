@@ -42,7 +42,13 @@ def auth_2fa_user_login(
         raise ValueError("Invalid MFA type")
 
     try:
-        success = user_secret.check_code(data_dict["code"])
+        # Use verify_only=True here because this AJAX endpoint only
+        # pre-validates the code. The actual login (and replay tracking)
+        # happens when the form is subsequently submitted to the login
+        # endpoint, which calls check_code() again without verify_only.
+        # Without this, last_access gets set here, and the follow-up
+        # form submission sees the same code as a replay attack.
+        success = user_secret.check_code(data_dict["code"], verify_only=True)
     except exceptions.ReplayAttackError:
         return LoginResponse(
             success=False,
